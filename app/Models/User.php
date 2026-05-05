@@ -2,16 +2,29 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Laravel\Sanctum\HasApiTokens;
+use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
-class User extends Model
+class User extends Authenticatable
 {
-   protected $fillable = ['username','phone_number','email','password'];
+    use HasApiTokens, HasFactory, Notifiable;
 
-    public function vehicles() {
+    protected $fillable = [
+        'username',
+        'phone_number',
+        'email',
+        'password',
+    ];
 
-    return $this->hasMany(Vehicle::class);
-    
-  }
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
 
+    public function vehicles()
+    {
+        return $this->hasMany(Vehicle::class);
+    }
 }
