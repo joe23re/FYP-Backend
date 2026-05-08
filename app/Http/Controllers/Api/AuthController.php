@@ -11,19 +11,31 @@ use Illuminate\Validation\ValidationException;
 class AuthController extends Controller
 {
 
-    public function register(Request $request)
+   public function register(Request $request)
 {
     $fields = $request->validate([
-        'username' => ['required', 'string'],
+        'username' => ['required', 'string', 'unique:users,username'],
         'email' => ['required', 'email', 'unique:users,email'],
         'phone_number' => ['required', 'string'],
         'password' => ['required', 'min:6'],
     ]);
 
+    $phoneNumber = preg_replace('/[^0-9]/', '', $fields['phone_number']);
+
+    if (str_starts_with($phoneNumber, '961')) {
+        $phoneNumber = substr($phoneNumber, 3);
+    }
+
+    if (strlen($phoneNumber) !== 8) {
+        return response()->json([
+            'message' => 'Phone number must be 8 digits without +961.',
+        ], 422);
+    }
+
     $user = User::create([
         'username' => $fields['username'],
         'email' => $fields['email'],
-        'phone_number' => $fields['phone_number'],
+        'phone_number' => $phoneNumber,
         'password' => Hash::make($fields['password']),
     ]);
 
@@ -36,27 +48,54 @@ class AuthController extends Controller
 }
 
     public function login(Request $request)
-    {
-        $fields = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required'],
-        ]);
+{
+    $fields = $request->validate([
+        'username' => ['required', 'string'],
+        'password' => ['required'],
+    ]);
 
-        $user = User::where('email', $fields['email'])->first();
+    $user = User::where('username', $fields['username'])->first();
 
-        if (! $user || ! Hash::check($fields['password'], $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['Invalid credentials.'],
-            ]);
-        }
-
-        $token = $user->createToken('mobile-token')->plainTextToken;
-
-        return response()->json([
-            'user' => $user,
-            'token' => $token,
+    if (! $user || ! Hash::check($fields['password'], $user->password)) {
+        throw ValidationException::withMessages([
+            'username' => ['Invalid credentials.'],
         ]);
     }
+
+    $token = $user->createToken('mobile-token')->plainTextToken;
+
+    return response()->json([
+        'user' => $user,
+        'token' => $token,
+    ]);
+}
+
+
+    public function updateProfile(Request $request)
+{
+    $user = $request->user();
+
+    $fields = $request->validate([
+        'username' => ['required', 'string', 'unique:users,username,' . $user->id],
+        'phone_number' => ['required', 'string'],
+        'password' => ['nullable', 'min:6'],
+    ]);
+
+    $user->username = $fields['username'];
+    $user->phone_number = $fields['phone_number'];
+
+    if (!empty($fields['password'])) {
+        $user->password = Hash::make($fields['password']);
+    }
+
+    $user->save();
+
+    return response()->json([
+        'message' => 'Profile updated successfully',
+        'user' => $user,
+    ]);
+}
+
 
     public function me(Request $request)
     {
