@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class PasswordResetOtp extends Model
 {
     protected $fillable = [
-        'phone_number',
+        'email',
         'code',
         'expires_at',
         'verified_at',

@@ -6,79 +6,64 @@ use App\Http\Controllers\Controller;
 use App\Models\PasswordResetOtp;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 
 class ForgotPasswordController extends Controller
 {
-    private function cleanPhoneNumber(?string $phoneNumber): string
+    private function cleanEmail(?string $email): string
     {
-        $digits = preg_replace('/[^0-9]/', '', $phoneNumber ?? '');
-
-        if (str_starts_with($digits, '961')) {
-            $digits = substr($digits, 3);
-        }
-
-        return substr($digits, -8);
-    }
-
-    private function findUserByPhone(string $phoneNumber)
-    {
-        $cleanInputPhone = $this->cleanPhoneNumber($phoneNumber);
-
-        return User::all()->first(function ($user) use ($cleanInputPhone) {
-            return $this->cleanPhoneNumber($user->phone_number) === $cleanInputPhone;
-        });
+        return strtolower(trim($email ?? ''));
     }
 
     public function sendCode(Request $request)
     {
         $fields = $request->validate([
-            'phone_number' => ['required', 'string'],
+            'email' => ['required', 'email'],
         ]);
 
-        $phoneNumber = $this->cleanPhoneNumber($fields['phone_number']);
+        $email = $this->cleanEmail($fields['email']);
 
-        if (strlen($phoneNumber) !== 8) {
-            return response()->json([
-                'message' => 'Phone number must be 8 digits.',
-            ], 422);
-        }
-
-        $user = $this->findUserByPhone($phoneNumber);
+        $user = User::where('email', $email)->first();
 
         if (! $user) {
             return response()->json([
-                'message' => 'No account found with this phone number.',
+                'message' => 'No account found with this email address.',
             ], 404);
         }
 
         $code = (string) random_int(1000, 9999);
 
-        PasswordResetOtp::where('phone_number', $phoneNumber)->delete();
+        PasswordResetOtp::where('email', $email)->delete();
 
         PasswordResetOtp::create([
-            'phone_number' => $phoneNumber,
-            'code' => $code,
+            'email' => $email,
+            'code' => Hash::make($code),
             'expires_at' => now()->addMinutes(10),
         ]);
 
+        Mail::send('emails.forgot-password-code', [
+            'code' => $code,
+        ], function ($message) use ($email) {
+            $message->to($email);
+            $message->subject('Your VAGDIAG verification code');
+        });
+
         return response()->json([
-            'message' => 'Development verification code created successfully.',
-            'phone_number' => $phoneNumber,
-            'dev_code' => $code,
+            'message' => 'Verification code sent to your email.',
         ]);
     }
 
     public function verifyCode(Request $request)
     {
         $fields = $request->validate([
-            'phone_number' => ['required', 'string'],
+            'email' => ['required', 'email'],
             'code' => ['required', 'string', 'size:4'],
         ]);
 
-        $phoneNumber = $this->cleanPhoneNumber($fields['phone_number']);
+        $email = $this->cleanEmail($fields['email']);
 
-        $otp = PasswordResetOtp::where('phone_number', $phoneNumber)
-            ->where('code', $fields['code'])
+        $otp = PasswordResetOtp::where('email', $email)
             ->latest()
             ->first();
 
@@ -89,8 +74,16 @@ class ForgotPasswordController extends Controller
         }
 
         if (now()->greaterThan($otp->expires_at)) {
+            $otp->delete();
+
             return response()->json([
                 'message' => 'Verification code has expired.',
+            ], 422);
+        }
+
+        if (! Hash::check($fields['code'], $otp->code)) {
+            return response()->json([
+                'message' => 'Invalid verification code.',
             ], 422);
         }
 
@@ -99,53 +92,71 @@ class ForgotPasswordController extends Controller
 
         return response()->json([
             'message' => 'Code verified successfully.',
-            'phone_number' => $phoneNumber,
+            'email' => $email,
         ]);
     }
 
     public function resetPassword(Request $request)
-{
-    $fields = $request->validate([
-        'phone_number' => ['required', 'string'],
-        'code' => ['required', 'string', 'size:4'],
-        'password' => ['required', 'string', 'min:6'],
-    ]);
+    {
+        $fields = $request->validate([
+            'email' => ['required', 'email'],
+            'code' => ['required', 'string', 'size:4'],
+            'password' => [
+                'required',
+                'string',
+                'min:8',
+                'regex:/[A-Z]/',
+                'regex:/[a-z]/',
+                'regex:/[0-9]/',
+                'regex:/[@$!%*#?&]/',
+            ],
+        ], [
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.regex' => 'Password must contain uppercase, lowercase, number, and special character.',
+        ]);
 
-    $phoneNumber = $this->cleanPhoneNumber($fields['phone_number']);
+        $email = $this->cleanEmail($fields['email']);
 
-    $otp = PasswordResetOtp::where('phone_number', $phoneNumber)
-        ->where('code', $fields['code'])
-        ->whereNotNull('verified_at')
-        ->latest()
-        ->first();
+        $otp = PasswordResetOtp::where('email', $email)
+            ->whereNotNull('verified_at')
+            ->latest()
+            ->first();
 
-    if (! $otp) {
+        if (! $otp) {
+            return response()->json([
+                'message' => 'Please verify the code before resetting password.',
+            ], 422);
+        }
+
+        if (now()->greaterThan($otp->expires_at)) {
+            $otp->delete();
+
+            return response()->json([
+                'message' => 'Verification code has expired.',
+            ], 422);
+        }
+
+        if (! Hash::check($fields['code'], $otp->code)) {
+            return response()->json([
+                'message' => 'Invalid verification code.',
+            ], 422);
+        }
+
+        $user = User::where('email', $email)->first();
+
+        if (! $user) {
+            return response()->json([
+                'message' => 'No account found with this email address.',
+            ], 404);
+        }
+
+        $user->password = Hash::make($fields['password']);
+        $user->save();
+
+        $otp->delete();
+
         return response()->json([
-            'message' => 'Please verify the code before resetting password.',
-        ], 422);
+            'message' => 'Password reset successfully.',
+        ]);
     }
-
-    if (now()->greaterThan($otp->expires_at)) {
-        return response()->json([
-            'message' => 'Verification code has expired.',
-        ], 422);
-    }
-
-    $user = $this->findUserByPhone($phoneNumber);
-
-    if (! $user) {
-        return response()->json([
-            'message' => 'No account found with this phone number.',
-        ], 404);
-    }
-
-    $user->password = Hash::make($fields['password']);
-    $user->save();
-
-    $otp->delete();
-
-    return response()->json([
-        'message' => 'Password reset successfully.',
-    ]);
-}
 }
